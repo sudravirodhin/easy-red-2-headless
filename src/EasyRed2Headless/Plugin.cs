@@ -10,7 +10,7 @@ namespace EasyRed2Headless
     public class Plugin : BasePlugin
     {
         public const string PluginGuid = "com.antigravity.easyred2.headless";
-        public const string PluginName = "Easy Red 2 - Headless Dedicated Server";
+        public const string PluginName = "Easy Red 2 - Headless Dedicated Multiplayer Server";
         public const string PluginVersion = "0.1.0";
 
         internal static Plugin Instance;

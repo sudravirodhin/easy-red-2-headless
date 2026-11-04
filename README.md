@@ -1,12 +1,12 @@
-# Easy Red 2 — Headless Dedicated Co-op Server (`v0.1.0`)
+# Easy Red 2 — Headless Dedicated Multiplayer Server (`v0.1.0`)
 
 > [!IMPORTANT]
 > **Disclosure — Vibecoded Project:**
 > This mod was **vibecoded** (designed, reverse-engineered, and written collaboratively with an AI coding agent). If you are averse to AI-assisted or AI-generated software/mods, please be aware of this upfront before downloading or using this repository.
 
-A **BepInEx 6 (IL2CPP)** Headless / Dedicated Co-op Server plugin and zero-duplication staging launcher for **Easy Red 2** (companion project to **[Easy Red 2 — Humanized AI & Veteran Tactics (`easy-red-2-ai`)](https://github.com/sudravirodhin/easy-red-2-ai)**).
+A **BepInEx 6 (IL2CPP)** Headless / Dedicated Multiplayer Server plugin (**supporting both PvP and Co-op**) and zero-duplication staging launcher for **Easy Red 2** (companion project to **[Easy Red 2 — Humanized AI & Veteran Tactics (`easy-red-2-ai`)](https://github.com/sudravirodhin/easy-red-2-ai)**).
 
-Instead of forcing one player's game client to shoulder both **high-FPS client rendering** and **100% of the MasterClient AI/Physics simulation (`BattleManager`, `SpawnManager`, `SoldierAI`, `TurretAI`, `AIVehicle`, `Physics.Raycast`)**, this project runs a **stripped-down background instance of `Easy Red 2.exe`** on its own CPU cores with **near-zero GPU load**, acting as a dedicated Photon `MasterClient` so **every human player (including the host's PC) connects as a pure client**.
+Instead of forcing one player's game client to shoulder both **high-FPS client rendering** and **100% of the MasterClient AI/Physics simulation (`BattleManager`, `SpawnManager`, `SoldierAI`, `TurretAI`, `AIVehicle`, `Physics.Raycast`)**, this project runs a **stripped-down background instance of `Easy Red 2.exe`** on its own CPU cores with **near-zero GPU load**, acting as a dedicated Photon `MasterClient` so **every human player (across both Invader and Defender teams in PvP, or together in Co-op) connects as a pure client**.
 
 ---
 
@@ -21,12 +21,13 @@ Instead of forcing one player's game client to shoulder both **high-FPS client r
 
 ---
 
-## Why Run a Headless Co-op Host?
+## Why Run a Headless Multiplayer / Co-op Host?
 
 In *Easy Red 2*, Unity's `Transform`, `Physics.Raycast` (PhysX), `CharacterController`, and `SoldierAI` updates are all bound to the **Unity Main Thread**:
 1. **Eliminates Host Client FPS Drops**: When you host a match normally, your client's single main thread must prepare every rendered frame (camera culling, skinning, animations, IK, particles, audio, UI) *and* simulate 100+ AI bots. Offloading the `MasterClient` role to a separate headless process frees your playing client to only interpolate network snapshots and render graphics.
-2. **Eliminates Frame-Jitter Co-op Desyncs**: Photon PUN (`SyncSoldier`, `SyncVehicle`) packet pacing depends on the `MasterClient`'s update loop. Because the headless server disables cameras (`Camera.enabled = false`), mutes audio (`AudioListener.pause = true`), and runs at a locked tick rate (`45–60 Hz`) with `~0%` GPU load, connected Co-op players receive rock-steady network updates even during heavy artillery barrages.
-3. **Keeps Your Steam Game Folder 100% Pure Vanilla**: Using Windows Directory Junctions (`mklink /J`), the headless server runs from an isolated `< 150 MB` `server_instance\` folder that links read-only data (`Easy Red 2_Data`, `MonoBleedingEdge`) from your Steam installation while keeping `BepInEx`, `dotnet`, `winhttp.dll`, and server plugins completely separate from your normal Steam client.
+2. **Eliminates Frame-Jitter Multiplayer Desyncs**: Photon PUN (`SyncSoldier`, `SyncVehicle`) packet pacing depends on the `MasterClient`'s update loop. Because the headless server disables cameras (`Camera.enabled = false`), mutes audio (`AudioListener.pause = true`), and runs at a locked tick rate (`45–60 Hz`) with `~0%` GPU load, connected players in both **PvP** and **Co-op** receive rock-steady network updates even during heavy artillery barrages.
+3. **Full PvP & Co-op Team Slot Control**: Supports configuring `MatchData.mp_max_players_invaders` and `MatchData.mp_max_players_defenders` (e.g., balanced PvP across both factions, Asymmetric PvP, or pure Co-op on one side) plus friendly-fire/teamkill rules (`mp_allow_teamkillers`, `mp_kick_teamkillers`) and realism locks (`mp_allow_crosshair`, `mp_allow_hitmarker`, `mp_allow_tps`).
+4. **Keeps Your Steam Game Folder 100% Pure Vanilla**: Using Windows Directory Junctions (`mklink /J`), the headless server runs from an isolated `< 150 MB` `server_instance\` folder that links read-only data (`Easy Red 2_Data`, `MonoBleedingEdge`) from your Steam installation while keeping `BepInEx`, `dotnet`, `winhttp.dll`, and server plugins completely separate from your normal Steam client.
 
 ---
 
