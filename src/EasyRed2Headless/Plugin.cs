@@ -3,6 +3,8 @@ using BepInEx;
 using BepInEx.Logging;
 using BepInEx.Unity.IL2CPP;
 using HarmonyLib;
+using Il2CppInterop.Runtime.Injection;
+using UnityEngine;
 
 namespace EasyRed2Headless
 {
@@ -21,9 +23,20 @@ namespace EasyRed2Headless
         {
             Instance = this;
             Log = base.Log;
-            _harmony = new Harmony(PluginGuid);
 
-            Log.LogInfo($"{PluginName} v{PluginVersion} initialized.");
+            HeadlessConfig.Init(Config);
+
+            _harmony = new Harmony(PluginGuid);
+            HeadlessPatches.Apply(_harmony);
+
+            ClassInjector.RegisterTypeInIl2Cpp<HeadlessServerController>();
+
+            var hostGo = new GameObject("EasyRed2HeadlessServerHost");
+            UnityEngine.Object.DontDestroyOnLoad(hostGo);
+            hostGo.hideFlags = HideFlags.HideAndDontSave;
+            hostGo.AddComponent<HeadlessServerController>();
+
+            Log.LogInfo($"{PluginName} v{PluginVersion} initialized (ServerName='{HeadlessConfig.ServerName.Value}', Campaign='{HeadlessConfig.CampaignFilter.Value}').");
         }
     }
 }
