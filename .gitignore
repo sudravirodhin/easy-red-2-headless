@@ -1,0 +1,12 @@
+# Build output
+build/
+releases/
+server_instance/
+
+# Extracted BepInEx & Roslyn binaries
+tools/
+
+# Local notes & agent rules
+AGENTS.md
+NOTES.md
+docs/
