@@ -43,6 +43,58 @@ function Resolve-CscPath {
     throw "Could not locate Roslyn csc.dll. Install the .NET SDK or place Roslyn under tools\roslyn."
 }
 
+function Patch-ServerUnityPlayerSingleInstance {
+    param([string]$UnityPlayerPath)
+
+    if (-not (Test-Path $UnityPlayerPath)) { return }
+
+    $bytes = [System.IO.File]::ReadAllBytes($UnityPlayerPath)
+    $modified = $false
+
+    function Replace-ByteSequence([byte[]]$buffer, [byte[]]$oldSeq, [byte[]]$newSeq) {
+        if ($oldSeq.Length -ne $newSeq.Length) {
+            throw "Replacement sequence must match exact byte length."
+        }
+        $count = 0
+        $first = $oldSeq[0]
+        $max = $buffer.Length - $oldSeq.Length
+        for ($i = 0; $i -le $max; $i++) {
+            if ($buffer[$i] -eq $first) {
+                $match = $true
+                for ($j = 1; $j -lt $oldSeq.Length; $j++) {
+                    if ($buffer[$i + $j] -ne $oldSeq[$j]) { $match = $false; break }
+                }
+                if ($match) {
+                    for ($j = 0; $j -lt $newSeq.Length; $j++) {
+                        $buffer[$i + $j] = $newSeq[$j]
+                    }
+                    $count++
+                }
+            }
+        }
+        return $count
+    }
+
+    # 1. Isolate Unity's single-instance Win32 Mutex name (-SingleInstanceMutex- -> -ServerInstanceMutex-)
+    $oldMutex = [System.Text.Encoding]::ASCII.GetBytes("-SingleInstanceMutex-")
+    $newMutex = [System.Text.Encoding]::ASCII.GetBytes("-ServerInstanceMutex-")
+    if ((Replace-ByteSequence $bytes $oldMutex $newMutex) -gt 0) {
+        $modified = $true
+    }
+
+    # 2. Isolate Unity's Win32 Window Class name (UnityWndClass -> UnitySrvClass) so vanilla client FindWindowW never focuses the server
+    $oldWnd = [System.Text.Encoding]::Unicode.GetBytes("UnityWndClass")
+    $newWnd = [System.Text.Encoding]::Unicode.GetBytes("UnitySrvClass")
+    if ((Replace-ByteSequence $bytes $oldWnd $newWnd) -gt 0) {
+        $modified = $true
+    }
+
+    if ($modified) {
+        [System.IO.File]::WriteAllBytes($UnityPlayerPath, $bytes)
+        Write-Host "  -> Isolated single-instance mutex & window class in server_instance\UnityPlayer.dll" -ForegroundColor Green
+    }
+}
+
 $bepInExRoot = Join-Path $workspace "tools\bepinex\extracted"
 $dotnetDir = Join-Path $bepInExRoot "dotnet"
 $coreDir = Join-Path $bepInExRoot "BepInEx\core"
@@ -96,6 +148,14 @@ if (Test-Path $aiDll) {
     Copy-Item -Force $aiDll (Join-Path $buildDir "EasyRed2HumanAI.dll")
 }
 
+$serverDir = Join-Path $workspace "server_instance"
+if (Test-Path (Join-Path $serverDir "UnityPlayer.dll")) {
+    Patch-ServerUnityPlayerSingleInstance -UnityPlayerPath (Join-Path $serverDir "UnityPlayer.dll")
+}
+if (Test-Path (Join-Path $serverDir "BepInEx\plugins")) {
+    Copy-Item -Force "$buildDir\EasyRed2HeadlessServer.dll" (Join-Path $serverDir "BepInEx\plugins\EasyRed2HeadlessServer.dll")
+}
+
 if ($SetupServerInstance) {
     Write-Host "[2/2] Setting up isolated server_instance staging directory..." -ForegroundColor Cyan
     $resolvedGameDir = Resolve-EasyRed2GameDir -ExplicitPath $GameDir
@@ -103,7 +163,6 @@ if ($SetupServerInstance) {
         throw "Could not locate Easy Red 2 installation directory. Pass -GameDir 'path\to\Easy Red 2'."
     }
 
-    $serverDir = Join-Path $workspace "server_instance"
     New-Item -ItemType Directory -Force -Path $serverDir | Out-Null
 
     # Copy root executables/DLLs (leaves vanilla directory 100% untouched)
@@ -115,6 +174,8 @@ if ($SetupServerInstance) {
             Write-Host "  -> Copied $file"
         }
     }
+
+    Patch-ServerUnityPlayerSingleInstance -UnityPlayerPath (Join-Path $serverDir "UnityPlayer.dll")
 
     # Create steam_appid.txt for Steamworks initialization
     Set-Content -Path (Join-Path $serverDir "steam_appid.txt") -Value "1324780" -NoNewline

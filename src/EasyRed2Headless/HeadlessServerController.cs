@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using Photon.Pun;
 using Photon.Realtime;
 using UnityEngine;
@@ -9,6 +10,12 @@ namespace EasyRed2Headless
     public class HeadlessServerController : MonoBehaviour
     {
         public HeadlessServerController(IntPtr ptr) : base(ptr) { }
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetActiveWindow();
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern bool SetWindowTextW(IntPtr hWnd, string lpString);
 
         private enum StartupState
         {
@@ -29,6 +36,7 @@ namespace EasyRed2Headless
         private bool _render3DCameras = false;
         private static bool _steamLockReleased = false;
         private static bool _loggedCampaignCatalog = false;
+        private bool _syncedInitialAIState = false;
 
         // Cached telemetry for OnGUI (updated 1x/sec, zero per-frame allocation)
         private string _statusHeadline = "Initializing Headless Server...";
@@ -46,6 +54,12 @@ namespace EasyRed2Headless
         private void Update()
         {
             if (!HeadlessConfig.EnableHeadlessServer.Value) return;
+
+            if (!_syncedInitialAIState)
+            {
+                _syncedInitialAIState = true;
+                SyncCustomAIState(HeadlessConfig.EnableCustomAI.Value);
+            }
 
             _smoothedFps += ((1f / Mathf.Max(0.0001f, Time.unscaledDeltaTime)) - _smoothedFps) * 0.05f;
 
@@ -511,7 +525,7 @@ namespace EasyRed2Headless
                 _roomSummary = $"Server: {roomName}  |  Region: {region}  |  Room ID: {room?.Name ?? "N/A"}";
                 _missionSummary = $"Campaign: {HeadlessConfig.CampaignFilter.Value} ({battleIdx}/{battleTotal}) — {missionName}";
                 _playersSummary = $"Human Players: {humanPlayers} / {maxPlayers} ({md?.mp_max_players_invaders ?? 8}v{md?.mp_max_players_defenders ?? 8} PvP)  |  Active Units: {activeBots}";
-                _rulesSummary = $"Difficulty: Normal  |  Friendly Fire: {(md?.mp_allow_teamkillers == true ? "ON" : "OFF")}  |  Auto-Kick TK: {(md?.mp_kick_teamkillers == true ? "ON" : "OFF")}  |  Voting: {(md?.mp_voting_enabled == true ? "ON" : "OFF")}";
+                _rulesSummary = $"Diff: Normal  |  FF: {(md?.mp_allow_teamkillers == true ? "ON" : "OFF")}  |  Kick TK: {(md?.mp_kick_teamkillers == true ? "ON" : "OFF")}  |  Voting: {(md?.mp_voting_enabled == true ? "ON" : "OFF")}  |  Custom AI: {(HeadlessConfig.EnableCustomAI.Value ? "ON" : "OFF")}";
 
                 if (Mathf.FloorToInt(Time.unscaledTime) % 5 == 0)
                 {
@@ -534,6 +548,12 @@ namespace EasyRed2Headless
                 if (resizeWindow)
                 {
                     Screen.SetResolution(540, 300, false);
+                }
+
+                IntPtr hwnd = GetActiveWindow();
+                if (hwnd != IntPtr.Zero)
+                {
+                    SetWindowTextW(hwnd, $"Easy Red 2 — Headless Server ({HeadlessConfig.ServerName.Value})");
                 }
             }
             catch { }
@@ -602,6 +622,32 @@ namespace EasyRed2Headless
             return configuredRegion;
         }
 
+        public static void SyncCustomAIState(bool enable)
+        {
+            try
+            {
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    var modCfgType = asm.GetType("EasyRed2HumanAI.VisionConfig", false);
+                    if (modCfgType != null)
+                    {
+                        var field = modCfgType.GetField("EnableMod", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                        var entry = field?.GetValue(null) as BepInEx.Configuration.ConfigEntry<bool>;
+                        if (entry != null)
+                        {
+                            entry.Value = enable;
+                            Plugin.Log.LogInfo($"[HeadlessServer] Custom AI (EasyRed2HumanAI) toggled to: {(enable ? "ENABLED" : "DISABLED (Vanilla AI)")}");
+                        }
+                        break;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning($"[HeadlessServer] SyncCustomAIState note: {ex.Message}");
+            }
+        }
+
         private void OnGUI()
         {
             if (!HeadlessConfig.EnableHeadlessServer.Value) return;
@@ -628,8 +674,8 @@ namespace EasyRed2Headless
 
             if (_state == StartupState.RunningInBattle)
             {
-                string camLabel = _render3DCameras ? "Disable 3D Camera (Save GPU)" : "Enable 3D Camera Preview";
-                if (GUI.Button(new Rect(20, y, 210, 28), camLabel))
+                string camLabel = _render3DCameras ? "3D Camera: ON" : "3D Camera: OFF";
+                if (GUI.Button(new Rect(20, y, 145, 28), camLabel))
                 {
                     _render3DCameras = !_render3DCameras;
                     var cameras = Camera.allCameras;
@@ -642,7 +688,15 @@ namespace EasyRed2Headless
                     }
                 }
 
-                if (GUI.Button(new Rect(245, y, 180, 28), "Skip To Next Mission"))
+                string aiLabel = HeadlessConfig.EnableCustomAI.Value ? "Custom AI: ON" : "Custom AI: OFF";
+                if (GUI.Button(new Rect(175, y, 145, 28), aiLabel))
+                {
+                    HeadlessConfig.EnableCustomAI.Value = !HeadlessConfig.EnableCustomAI.Value;
+                    SyncCustomAIState(HeadlessConfig.EnableCustomAI.Value);
+                    RefreshBattleTelemetry();
+                }
+
+                if (GUI.Button(new Rect(330, y, 165, 28), "Skip Next Mission"))
                 {
                     try
                     {

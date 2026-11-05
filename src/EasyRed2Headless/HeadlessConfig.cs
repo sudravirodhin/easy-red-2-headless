@@ -21,6 +21,7 @@ namespace EasyRed2Headless
         public static ConfigEntry<int> TargetTickRate;
         public static ConfigEntry<bool> Disable3DCamerasInBattle;
         public static ConfigEntry<bool> ShutdownSteamAfterRoomCreated;
+        public static ConfigEntry<bool> EnableCustomAI;
 
         public static void Init(ConfigFile config)
         {
@@ -33,7 +34,7 @@ namespace EasyRed2Headless
             ServerName = config.Bind(
                 "1. General",
                 "ServerName",
-                "US South 1Gbps",
+                "Headless",
                 "Public server name displayed in the Easy Red 2 Multiplayer Server Browser (supports >8 characters).");
 
             Region = config.Bind(
@@ -123,8 +124,14 @@ namespace EasyRed2Headless
             ShutdownSteamAfterRoomCreated = config.Bind(
                 "4. Performance & Headless",
                 "ShutdownSteamAfterRoomCreated",
-                true,
-                "Shut down the headless process's SteamAPI pipe after the Photon room is created so you can launch your normal Easy Red 2 client from Steam on the same PC.");
+                false,
+                "Shut down the headless process's SteamAPI pipe after the Photon room is created.");
+
+            EnableCustomAI = config.Bind(
+                "5. Integrations",
+                "EnableCustomAI",
+                false,
+                "Enable the EasyRed2HumanAI custom AI overhaul on the server (false = pure vanilla AI; can also be toggled live in the server window).");
         }
     }
 }

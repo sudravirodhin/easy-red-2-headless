@@ -73,10 +73,74 @@ namespace EasyRed2Headless
                 {
                     harmony.Patch(blDisconnected, postfix: new HarmonyMethod(typeof(HeadlessPatches), nameof(BattleLoader_OnDisconnected_Postfix)));
                 }
+
+                // 6. Skip GamepadsAPI.Update & FriendMatchJoiner.Update on Headless Server (prevents SteamInput polling & 'Steamworks is not initialized' spam)
+                var gpUpdate = AccessTools.Method(typeof(GamepadsAPI), nameof(GamepadsAPI.Update));
+                if (gpUpdate != null)
+                {
+                    harmony.Patch(gpUpdate, prefix: new HarmonyMethod(typeof(HeadlessPatches), nameof(SkipOnHeadless_Prefix)));
+                }
+
+                var fmjUpdate = AccessTools.Method(typeof(FriendMatchJoiner), nameof(FriendMatchJoiner.Update));
+                if (fmjUpdate != null)
+                {
+                    harmony.Patch(fmjUpdate, prefix: new HarmonyMethod(typeof(HeadlessPatches), nameof(SkipOnHeadless_Prefix)));
+                }
+
+                // 7. Clear RoomOptionBit.CheckUserOnJoin (0x1) & PublishUserId (0x8) in LoadBalancingPeer.RoomOptionsToOpParameters
+                // so the host's own Steam client on the same PC (same Steam UserId) can join the room without Photon Error 32746 (JoinFailedFoundActiveJoiner)
+                var roToOp = AccessTools.Method(typeof(LoadBalancingPeer), nameof(LoadBalancingPeer.RoomOptionsToOpParameters));
+                if (roToOp != null)
+                {
+                    harmony.Patch(
+                        roToOp,
+                        prefix: new HarmonyMethod(typeof(HeadlessPatches), nameof(LoadBalancingPeer_RoomOptionsToOpParameters_Prefix)),
+                        postfix: new HarmonyMethod(typeof(HeadlessPatches), nameof(LoadBalancingPeer_RoomOptionsToOpParameters_Postfix)));
+                }
             }
             catch (Exception ex)
             {
                 Plugin.Log.LogError($"[HeadlessPatches] Failed applying patches: {ex}");
+            }
+        }
+
+        public static bool SkipOnHeadless_Prefix()
+        {
+            return !HeadlessConfig.EnableHeadlessServer.Value;
+        }
+
+        public static void LoadBalancingPeer_RoomOptionsToOpParameters_Prefix(RoomOptions roomOptions)
+        {
+            if (!HeadlessConfig.EnableHeadlessServer.Value || roomOptions == null) return;
+            roomOptions.PublishUserId = false;
+        }
+
+        public static void LoadBalancingPeer_RoomOptionsToOpParameters_Postfix(
+            Il2CppSystem.Collections.Generic.Dictionary<byte, Il2CppSystem.Object> op,
+            RoomOptions roomOptions)
+        {
+            if (!HeadlessConfig.EnableHeadlessServer.Value || op == null) return;
+
+            try
+            {
+                byte flagsKey = ParameterCode.RoomOptionFlags;
+                if (op.ContainsKey(flagsKey))
+                {
+                    var boxedFlags = op[flagsKey];
+                    if (boxedFlags != null)
+                    {
+                        int oldFlags = boxedFlags.Unbox<int>();
+                        int newFlags = oldFlags & ~(0x1 | 0x8);
+                        IntPtr unboxedPtr = Il2CppInterop.Runtime.IL2CPP.il2cpp_object_unbox(boxedFlags.Pointer);
+                        System.Runtime.InteropServices.Marshal.WriteInt32(unboxedPtr, newFlags);
+                        int verifyFlags = op[flagsKey].Unbox<int>();
+                        Plugin.Log.LogInfo($"[HeadlessPatches] RoomOptionsToOpParameters -> RoomOptionFlags: 0x{oldFlags:X} -> 0x{verifyFlags:X} (CheckUserOnJoin={(verifyFlags & 0x1) != 0}, PublishUserId={(verifyFlags & 0x8) != 0}).");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning($"[HeadlessPatches] RoomOptionsToOpParameters_Postfix warning: {ex.Message}");
             }
         }
 
@@ -135,6 +199,10 @@ namespace EasyRed2Headless
             try
             {
                 var ro = MatchData.roomOptions;
+                if (ro != null)
+                {
+                    ro.PublishUserId = false;
+                }
                 int maxPlayers = ro != null ? ro.MaxPlayers : -1;
                 int propCount = ro?.CustomRoomProperties != null ? ro.CustomRoomProperties.Count : -1;
 
@@ -143,7 +211,7 @@ namespace EasyRed2Headless
                     $"Region='{__instance.mp_region}', Voting={__instance.mp_voting_enabled}, " +
                     $"FriendlyFire={__instance.mp_allow_teamkillers}, KickTK={__instance.mp_kick_teamkillers}, " +
                     $"UnverifiedAllowed={__instance.mp_allow_unverified_clients}, " +
-                    $"Slots={__instance.mp_max_players_invaders}v{__instance.mp_max_players_defenders} (RoomOptions.MaxPlayers={maxPlayers}, Props={propCount}, maxPlayersOnline={ServerListMenu.maxPlayersOnline}), " +
+                    $"Slots={__instance.mp_max_players_invaders}v{__instance.mp_max_players_defenders} (RoomOptions.MaxPlayers={maxPlayers}, PublishUserId={ro?.PublishUserId}, Props={propCount}, maxPlayersOnline={ServerListMenu.maxPlayersOnline}), " +
                     $"Battles={__instance.battles?.Count ?? 0}");
             }
             catch (Exception ex)

@@ -1,3 +1,4 @@
 @echo off
-setlocal
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Process 'Easy Red 2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*\server_instance\Easy Red 2.exe' } | ForEach-Object { Write-Host ('Stopping Headless Server PID ' + $_.Id); Stop-Process -Id $_.Id -Force }"
+echo [INFO] Stopping Easy Red 2 Headless Dedicated Server (leaving Vanilla Client untouched)...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -Filter \"Name = 'Easy Red 2.exe'\" | Where-Object { $_.ExecutablePath -like '*server_instance*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
+echo [INFO] Headless server stopped.
