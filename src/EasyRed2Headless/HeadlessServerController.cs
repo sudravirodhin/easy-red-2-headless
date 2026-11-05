@@ -28,6 +28,7 @@ namespace EasyRed2Headless
         }
 
         public static bool IsAutoStarting { get; private set; } = true;
+        public static int RoomNameCollisionCount { get; set; } = 0;
 
         private StartupState _state = StartupState.WaitingForMainMenu;
         private float _stateTimer = 0f;
@@ -253,21 +254,7 @@ namespace EasyRed2Headless
                 $"[HeadlessServer] Starting Campaign Server '{md.room_name}' on Region '{md.mp_region}' " +
                 $"with {md.battles.Count} missions (First Mission: {md.battles[0]?.battle_reference?.GetUniqueId()}, RoomOptionsNull={MatchData.roomOptions == null})...");
 
-            Transform disableMenu = ServerListMenu.instance != null && ServerListMenu.instance.multiplayerMenuPanel != null
-                ? ServerListMenu.instance.multiplayerMenuPanel.transform
-                : null;
-            Transform fadePanel = ServerListMenu.instance != null && ServerListMenu.instance.fadePanel != null
-                ? ServerListMenu.instance.fadePanel.transform
-                : null;
-
-            if (MainMenu.instance != null)
-            {
-                MainMenu.instance.StartCoroutine(CampaignsTree.StartMission(disableMenu, fadePanel));
-            }
-            else
-            {
-                md.StartBattleLoading();
-            }
+            md.StartBattleLoading();
         }
 
         public static void ApplyConfiguredMatchSettings(MatchData md)
@@ -278,7 +265,10 @@ namespace EasyRed2Headless
 
             md.isMultiplayer = true;
             MatchData.actorType = MatchData.RoomActorType.master;
-            md.room_name = HeadlessConfig.ServerName.Value;
+            string baseName = HeadlessConfig.ServerName.Value ?? "Headless";
+            md.room_name = RoomNameCollisionCount > 0
+                ? baseName + new string(' ', Mathf.Min(RoomNameCollisionCount, 8))
+                : baseName;
 
             // MultiSelectOrdered keeps all campaign missions in chronological order while enabling Map Voting across the full campaign
             md.playType = MatchData.MissionsPlayType.MultiSelectOrdered;
@@ -530,9 +520,161 @@ namespace EasyRed2Headless
                 if (Mathf.FloorToInt(Time.unscaledTime) % 5 == 0)
                 {
                     Plugin.Log.LogInfo($"[Telemetry] InRoom={PhotonNetwork.InRoom} | NetState={PhotonNetwork.NetworkClientState} | Server={PhotonNetwork.Server} | TimeScale={Time.timeScale:F1} | MsgQ={PhotonNetwork.IsMessageQueueRunning} | {_roomSummary} | {_missionSummary} | {_playersSummary} | FPS={_smoothedFps:F0}");
+                    LogAiDiagnostics();
                 }
             }
             catch { }
+        }
+
+        private void LogAiDiagnostics()
+        {
+            try
+            {
+                var bm = BattleManager.instance;
+                var rmCam = ResourcesManager.mainCamera;
+                var mainCam = Camera.main;
+
+                string playersInfo = "";
+                var plist = PhotonNetwork.PlayerList;
+                if (plist != null)
+                {
+                    for (int i = 0; i < plist.Length; i++)
+                    {
+                        var p = plist[i];
+                        if (p != null)
+                        {
+                            playersInfo += $"P{i}[#{p.ActorNumber},'{p.NickName}',master={p.IsMasterClient},local={p.IsLocal}] ";
+                        }
+                    }
+                }
+
+                Plugin.Log.LogInfo(
+                    $"[AIDiag] IsMaster={PhotonNetwork.IsMasterClient} | Players({PhotonNetwork.CurrentRoom?.PlayerCount})={playersInfo}| " +
+                    $"BM.IsPlaying={bm?.IsPlaying()} | BM.IsBattleActive={BattleManager.IsBattleActive()} | BM.phase={bm?.currentPhaseNum} | " +
+                    $"RM.mainCam={(rmCam != null ? $"{rmCam.name}(en={rmCam.enabled},pos={rmCam.transform.position})" : "NULL")} | " +
+                    $"Creature.seqIdx={Creature.sequentialUpdateIndex} | Time.time={Time.time:F1}");
+
+                if (Creature.allCreatures == null) return;
+
+                int total = Creature.allCreatures.Count;
+                int aliveSoldiers = 0;
+                int onVehicleCount = 0;
+                int movingCount = 0;
+                int hasPathCount = 0;
+                int hasDestCount = 0;
+                int withTarget = 0;
+                int pressingTrigger = 0;
+                int alliesCount = 0;
+                int axisCount = 0;
+
+                var allies = new List<Soldier>(40);
+                var axis = new List<Soldier>(40);
+                string sampleInfo = "";
+
+                for (int i = 0; i < total; i++)
+                {
+                    var c = Creature.allCreatures[i];
+                    if (c == null || !c.IsAlive) continue;
+                    var s = c.TryCast<Soldier>();
+                    if (s == null) continue;
+                    aliveSoldiers++;
+
+                    if (s.IsOnVehicle()) onVehicleCount++;
+                    if (s.HasDestinationAssigned) hasDestCount++;
+                    if (s.IsPressingTrigger) pressingTrigger++;
+
+                    string fac = s.faction ?? "";
+                    if (fac.EndsWith("_allies", StringComparison.OrdinalIgnoreCase))
+                        allies.Add(s);
+                    else if (fac.EndsWith("_axis", StringComparison.OrdinalIgnoreCase))
+                        axis.Add(s);
+
+                    var ai = s.aiController;
+                    if (ai != null)
+                    {
+                        if (ai.IsMoving()) movingCount++;
+                        if (ai.HasPath) hasPathCount++;
+                        if (ai.visibleTarget != null || s.CurrentVisibleTarget != null) withTarget++;
+                    }
+
+                    if (aliveSoldiers <= 4 && ai != null)
+                    {
+                        var veh = s.GetCurrentVehicle();
+                        var aiv = veh != null ? veh.GetComponent<AIVehicle>() : null;
+                        string vehStr = veh != null
+                            ? $"{veh.name}(drv={veh.GetDriver()?.name_surname},phys={veh.IsPhysicsEnabled},lod={veh.IsLodded()},aiDest={aiv?.destinationActive},rch={aiv?.DestinationReached},reqDrv={aiv?.RequiresDriver})"
+                            : "no";
+                        sampleInfo += $" | S{aliveSoldiers}[{s.name_surname},fac={s.faction},onVeh={vehStr},rnd={s.IsRendered},cc={s.m_controller?.enabled},p_mov={s.Params?.canMove},p_chk={s.Params?.checkForEnemies},sqOrd={s.joinedSquad?.order},hasDest={s.HasDestinationAssigned},hasPath={ai.HasPath},isMov={ai.IsMoving()},mvTime={ai.IsMoveTime},spd={ai.speed:F1},vis={(ai.visibleTarget != null)},pos={s.transform.position},mvDest={ai.MoveDestination}]";
+                    }
+                }
+
+                alliesCount = allies.Count;
+                axisCount = axis.Count;
+
+                // Find closest opposing pair on foot and overall
+                float minOverallDist = 999999f;
+                Soldier bestA = null, bestB = null;
+                float minFootDist = 999999f;
+                Soldier footA = null, footB = null;
+
+                for (int i = 0; i < allies.Count; i++)
+                {
+                    var a = allies[i];
+                    Vector3 pa = a.transform.position;
+                    bool aFoot = !a.IsOnVehicle();
+                    for (int j = 0; j < axis.Count; j++)
+                    {
+                        var b = axis[j];
+                        float d = Vector3.Distance(pa, b.transform.position);
+                        if (d < minOverallDist)
+                        {
+                            minOverallDist = d;
+                            bestA = a;
+                            bestB = b;
+                        }
+                        if (aFoot && !b.IsOnVehicle() && d < minFootDist)
+                        {
+                            minFootDist = d;
+                            footA = a;
+                            footB = b;
+                        }
+                    }
+                }
+
+                string pairInfo = "";
+                Soldier pA = footA ?? bestA;
+                Soldier pB = footB ?? bestB;
+                float pDist = footA != null ? minFootDist : minOverallDist;
+                if (pA != null && pB != null)
+                {
+                    bool aSeesB = false, bSeesA = false;
+                    float camoA = -1f, camoB = -1f;
+                    try { aSeesB = pA.CanSee(pB.Cast<Spottable>()); } catch { }
+                    try { bSeesA = pB.CanSee(pA.Cast<Spottable>()); } catch { }
+                    try { camoA = pA.CamoDistanceAwareEnemies(false); } catch { }
+                    try { camoB = pB.CamoDistanceAwareEnemies(false); } catch { }
+                    string rayHit = "none";
+                    try
+                    {
+                        Vector3 eyeA = pA.FacePosition();
+                        Vector3 spotB = pB.SpotPosition();
+                        Vector3 dirAB = (spotB - eyeA).normalized;
+                        if (Physics.Raycast(eyeA, dirAB, out RaycastHit hit, 1000f, ResourcesManager.visionMask))
+                        {
+                            var conn = Creature.GetConnectedSpottable(hit.transform);
+                            rayHit = $"{hit.collider?.name}(lyr={hit.collider?.gameObject.layer},d={hit.distance:F1},spot={(conn != null ? conn.TryCast<Creature>()?.name ?? "yes" : "no")})";
+                        }
+                    }
+                    catch { }
+                    pairInfo = $" | ClosestPair(foot={(footA != null)},dist={pDist:F1}m,overall={minOverallDist:F1}m,rayAB={rayHit}): A[{pA.name_surname},onVeh={pA.IsOnVehicle()},rnd={pA.IsRendered},cc={pA.m_controller?.enabled},pos={pA.transform.position},camo={camoA:F0},seesB={aSeesB},vis={(pA.aiController?.visibleTarget != null)},canFire={pA.aiController?.HasEnemyAndCanFireAtHim}] vs B[{pB.name_surname},onVeh={pB.IsOnVehicle()},rnd={pB.IsRendered},cc={pB.m_controller?.enabled},pos={pB.transform.position},camo={camoB:F0},seesA={bSeesA},vis={(pB.aiController?.visibleTarget != null)},canFire={pB.aiController?.HasEnemyAndCanFireAtHim}]";
+                }
+
+                Plugin.Log.LogInfo($"[AIDiag-Units] alive={aliveSoldiers}/{total} (Allies={alliesCount},Axis={axisCount}) | onVeh={onVehicleCount} | hasDest={hasDestCount} | hasPath={hasPathCount} | moving={movingCount} | withTarget={withTarget} | firing={pressingTrigger}{pairInfo}{sampleInfo}");
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning($"[AIDiag] Error: {ex}");
+            }
         }
 
         private void ApplyHeadlessPerformanceSettings(bool resizeWindow)
@@ -542,7 +684,8 @@ namespace EasyRed2Headless
                 Application.runInBackground = true;
                 QualitySettings.vSyncCount = 0;
                 Application.targetFrameRate = Mathf.Clamp(HeadlessConfig.TargetTickRate.Value, 20, 120);
-                AudioListener.pause = true;
+                // Keep AudioListener unpaused at 0 volume so FMOD virtual channels play and release normally instead of piling up
+                AudioListener.pause = false;
                 AudioListener.volume = 0f;
 
                 if (resizeWindow)

@@ -238,6 +238,7 @@ namespace EasyRed2Headless
 
             try
             {
+                HeadlessServerController.RoomNameCollisionCount = 0;
                 var room = PhotonNetwork.CurrentRoom;
                 var md = MatchData.data;
                 Plugin.Log.LogInfo(
@@ -265,6 +266,11 @@ namespace EasyRed2Headless
         public static void BattleLoader_OnCreateRoomFailed_Postfix(short returnCode, string message)
         {
             Plugin.Log.LogError($"[HeadlessPatches] Photon OnCreateRoomFailed! Code={returnCode}, Message='{message}'");
+            if (returnCode == 32766)
+            {
+                HeadlessServerController.RoomNameCollisionCount++;
+                Plugin.Log.LogWarning($"[HeadlessPatches] Room name collision (32766); will append {HeadlessServerController.RoomNameCollisionCount} trailing space(s) on retry so room creation succeeds immediately.");
+            }
         }
 
         public static void BattleLoader_OnJoinRoomFailed_Postfix(short returnCode, string message)

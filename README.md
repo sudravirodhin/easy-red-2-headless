@@ -1,4 +1,10 @@
-# Easy Red 2 — Headless Dedicated Multiplayer Server (`v0.1.0`)
+# Easy Red 2 — Headless Dedicated Multiplayer Server (`v0.1.0` — Experimental / Unstable)
+
+> [!WARNING]
+> **Experimental / Unstable (Work in Progress):**
+> This project is currently **in active testing and is unstable**. While dual-instance launching, Photon room creation, same-PC client joining, and the live server dashboard work, running the host in an unspawned/camera-disabled headless state currently causes **AI LOD / vision / movement simulation issues** that are still being investigated. For normal gameplay right now, hosting a standard in-game Listen Server is recommended.
+
+---
 
 > [!IMPORTANT]
 > **Disclosure — Vibecoded Project:**
