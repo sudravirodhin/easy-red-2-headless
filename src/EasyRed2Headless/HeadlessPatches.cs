@@ -97,6 +97,34 @@ namespace EasyRed2Headless
                         prefix: new HarmonyMethod(typeof(HeadlessPatches), nameof(LoadBalancingPeer_RoomOptionsToOpParameters_Prefix)),
                         postfix: new HarmonyMethod(typeof(HeadlessPatches), nameof(LoadBalancingPeer_RoomOptionsToOpParameters_Postfix)));
                 }
+
+                // 8. Prevent disabled 3D cameras & host-camera-relative LOD culling from freezing bone transforms or disabling ragdoll hitboxes
+                var sSetCull = AccessTools.Method(typeof(Soldier), nameof(Soldier.SetAnimatorCullingMode));
+                if (sSetCull != null)
+                {
+                    harmony.Patch(sSetCull, prefix: new HarmonyMethod(typeof(HeadlessPatches), nameof(Soldier_SetAnimatorCullingMode_Prefix)));
+                }
+
+                var sSetRefresh = AccessTools.Method(typeof(Soldier), nameof(Soldier.SetAnimatorRefreshRate));
+                if (sSetRefresh != null)
+                {
+                    harmony.Patch(
+                        sSetRefresh,
+                        prefix: new HarmonyMethod(typeof(HeadlessPatches), nameof(Soldier_SetAnimatorRefreshRate_Prefix)),
+                        postfix: new HarmonyMethod(typeof(HeadlessPatches), nameof(Soldier_SetAnimatorRefreshRate_Postfix)));
+                }
+
+                var rmSetLod = AccessTools.Method(typeof(RagdollManager), nameof(RagdollManager.SetCollidersLOD));
+                if (rmSetLod != null)
+                {
+                    harmony.Patch(rmSetLod, prefix: new HarmonyMethod(typeof(HeadlessPatches), nameof(RagdollManager_SetCollidersLOD_Prefix)));
+                }
+
+                var crUpdateLod = AccessTools.Method(typeof(Creature), nameof(Creature.UpdateLodValues));
+                if (crUpdateLod != null)
+                {
+                    harmony.Patch(crUpdateLod, postfix: new HarmonyMethod(typeof(HeadlessPatches), nameof(Creature_UpdateLodValues_Postfix)));
+                }
             }
             catch (Exception ex)
             {
@@ -281,6 +309,60 @@ namespace EasyRed2Headless
         public static void BattleLoader_OnDisconnected_Postfix(DisconnectCause cause)
         {
             Plugin.Log.LogWarning($"[HeadlessPatches] Photon OnDisconnected! Cause={cause}");
+        }
+
+        public static void Soldier_SetAnimatorCullingMode_Prefix(ref AnimatorCullingMode cullingMode)
+        {
+            if (HeadlessConfig.EnableHeadlessServer.Value)
+            {
+                cullingMode = AnimatorCullingMode.AlwaysAnimate;
+            }
+        }
+
+        public static void Soldier_SetAnimatorRefreshRate_Prefix(Soldier __instance, ref float refreshDelay)
+        {
+            if (!HeadlessConfig.EnableHeadlessServer.Value || __instance == null || __instance.IsDead) return;
+
+            var synch = __instance.soldierSyncher;
+            bool isRemoteHuman = synch != null && synch.IsControlledByAPlayer();
+            if (isRemoteHuman)
+            {
+                refreshDelay = 0f;
+            }
+            else if (__instance.IsRendered && !__instance.IsOnVehicle() && refreshDelay > 0.12f)
+            {
+                refreshDelay = 0.12f;
+            }
+        }
+
+        public static void Soldier_SetAnimatorRefreshRate_Postfix(Soldier __instance)
+        {
+            if (!HeadlessConfig.EnableHeadlessServer.Value || __instance == null || __instance.IsDead) return;
+
+            var anim = __instance.m_Animator;
+            if (anim != null && anim.cullingMode != AnimatorCullingMode.AlwaysAnimate)
+            {
+                anim.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+            }
+        }
+
+        public static void RagdollManager_SetCollidersLOD_Prefix(ref bool loddedColliders)
+        {
+            if (HeadlessConfig.EnableHeadlessServer.Value)
+            {
+                loddedColliders = false;
+            }
+        }
+
+        public static void Creature_UpdateLodValues_Postfix(Creature __instance)
+        {
+            if (!HeadlessConfig.EnableHeadlessServer.Value || __instance == null) return;
+
+            var synch = __instance.soldierSyncher;
+            if (synch != null && synch.IsControlledByAPlayer())
+            {
+                __instance.lodDistance = 0;
+            }
         }
     }
 }

@@ -1,8 +1,8 @@
-# Easy Red 2 — Headless Dedicated Multiplayer Server (`v0.1.0` — Experimental / Unstable)
+# Easy Red 2 — Headless Dedicated Multiplayer Server (Archived — Proof of Concept)
 
-> [!WARNING]
-> **Experimental / Unstable (Work in Progress):**
-> This project is currently **in active testing and is unstable**. While dual-instance launching, Photon room creation, same-PC client joining, and the live server dashboard work, running the host in an unspawned/camera-disabled headless state currently causes **AI LOD / vision / movement simulation issues** that are still being investigated. For normal gameplay right now, hosting a standard in-game Listen Server is recommended.
+> [!CAUTION]
+> **Archived / Discontinued Proof-of-Concept:**
+> This repository is **archived** and kept purely as a proof-of-concept and technical post-mortem. Do not use it for normal gameplay. Because *Easy Red 2* is deeply coupled to an active rendered Listen Server host—and CPU-bound AI/PhysX simulation offers minimal net speedup on a second headless instance—development has ended in favor of running an optimized Listen Server with **[Easy Red 2 — Humanized AI & Veteran Tactics (`easy-red-2-ai`)](https://github.com/sudravirodhin/easy-red-2-ai)**.
 
 ---
 
@@ -12,7 +12,7 @@
 
 A **BepInEx 6 (IL2CPP)** Headless / Dedicated Multiplayer Server plugin (**supporting both PvP and Co-op**) and zero-duplication staging launcher for **Easy Red 2** (companion project to **[Easy Red 2 — Humanized AI & Veteran Tactics (`easy-red-2-ai`)](https://github.com/sudravirodhin/easy-red-2-ai)**).
 
-Instead of forcing one player's game client to shoulder both **high-FPS client rendering** and **100% of the MasterClient AI/Physics simulation (`BattleManager`, `SpawnManager`, `SoldierAI`, `TurretAI`, `AIVehicle`, `Physics.Raycast`)**, this project runs a **stripped-down background instance of `Easy Red 2.exe`** on its own CPU cores with **near-zero GPU load**, acting as a dedicated Photon `MasterClient` so **every human player (across both Invader and Defender teams in PvP, or together in Co-op) connects as a pure client**.
+Instead of forcing one player's game client to shoulder both **high-FPS client rendering** and **100% of the MasterClient AI/Physics simulation (`BattleManager`, `SpawnManager`, `SoldierAI`, `TurretAI`, `AIVehicle`, `Physics.Raycast`)**, this project attempted to run a **stripped-down background instance of `Easy Red 2.exe`** on its own CPU cores with **near-zero GPU load**, acting as a dedicated Photon `MasterClient` so **every human player (across both Invader and Defender teams in PvP, or together in Co-op) connects as a pure client**.
 
 ---
 
@@ -20,6 +20,7 @@ Instead of forcing one player's game client to shoulder both **high-FPS client r
 
 | Property | Details |
 | :--- | :--- |
+| **Status** | **Archived** (Proof-of-Concept / Post-Mortem) |
 | **Target Branch** | Steam `public` (Default Branch) |
 | **Confirmed Game Version** | **Easy Red 2 — Game Build `921`** (Steam Build ID `26375879`, Unity `2022.3.62f3` IL2CPP x64) |
 | **Mod Loader** | **[BepInEx 6 Bleeding Edge (`BepInEx-Unity.IL2CPP-win-x64`, build `#791`+)](https://builds.bepinex.dev/projects/bepinex_be)** |
@@ -27,11 +28,27 @@ Instead of forcing one player's game client to shoulder both **high-FPS client r
 
 ---
 
+## Post-Mortem: What Worked vs. Why It Was Shelved
+
+### What Worked
+* **Zero-duplication isolated staging (`server_instance\`)**: Windows Directory Junctions (`Easy Red 2_Data`, `Pizzeria`) let the dedicated instance run separately while keeping the Steam install 100% pure vanilla.
+* **Same-PC dual-instance isolation**: Binary-patching `server_instance\UnityPlayer.dll` (`-SingleInstanceMutex-` → `-ServerInstanceMutex-`, `UnityWndClass` → `UnitySrvClass`) allowed the server and a Steam client to run simultaneously on one machine.
+* **Same-account Photon join**: Clearing `CheckUserOnJoin` (`0x1`) & `PublishUserId` (`0x8`) in `LoadBalancingPeer.RoomOptionsToOpParameters` allowed the host's own Steam client to join the room on the same account without Photon Error `32746`.
+* **FMOD virtual channel fix**: Keeping `AudioListener.pause = false; AudioListener.volume = 0f` prevented `"Ran out of virtual channels"` FMOD audio exhaustion while remaining silent.
+* **Server management & boot**: Bypassed the 8-character server name cap, automated 15-mission looping campaign rotation + in-game Map Voting, added a live IMGUI telemetry dashboard, and confirmed `-batchmode -nographics` boots cleanly without DX11.
+
+### Why It Was Shelved
+* **Deep host-camera coupling breaks AI vision**: Even after forcing `AnimatorCullingMode.AlwaysAnimate`, keeping all 11 bone colliders enabled map-wide (`RagdollManager.SetCollidersLOD(false)`), clamping foot-AI animator refresh delays, and zeroing `Creature.lodDistance` for remote human players (`SyncSoldier.IsControlledByAPlayer()`), `Creature.CanSee` / `visionMask` raycasts still routinely passed through both bots and remote human players at `1–7m` under a camera-disabled headless host.
+* **Match lifecycle fragility**: Unspawned headless sessions still occasionally experienced unexpected returns to `MainMenu`.
+* **Marginal performance upside vs. an optimized Listen Server**: *Easy Red 2*'s bottleneck is CPU-bound Unity/PhysX/AI simulation (`~1.6–1.75 GB` RAM and `~45 FPS` for the headless host instance alone), so optimizing **[`easy-red-2-ai`](https://github.com/sudravirodhin/easy-red-2-ai)** directly for a standard Listen Server delivers better real-world results with zero headless desyncs.
+
+---
+
 ## Why Run a Headless Multiplayer / Co-op Host?
 
 In *Easy Red 2*, Unity's `Transform`, `Physics.Raycast` (PhysX), `CharacterController`, and `SoldierAI` updates are all bound to the **Unity Main Thread**:
 1. **Eliminates Host Client FPS Drops**: When you host a match normally, your client's single main thread must prepare every rendered frame (camera culling, skinning, animations, IK, particles, audio, UI) *and* simulate 100+ AI bots. Offloading the `MasterClient` role to a separate headless process frees your playing client to only interpolate network snapshots and render graphics.
-2. **Eliminates Frame-Jitter Multiplayer Desyncs**: Photon PUN (`SyncSoldier`, `SyncVehicle`) packet pacing depends on the `MasterClient`'s update loop. Because the headless server disables cameras (`Camera.enabled = false`), mutes audio (`AudioListener.pause = true`), and runs at a locked tick rate (`45–60 Hz`) with `~0%` GPU load, connected players in both **PvP** and **Co-op** receive rock-steady network updates even during heavy artillery barrages.
+2. **Eliminates Frame-Jitter Multiplayer Desyncs**: Photon PUN (`SyncSoldier`, `SyncVehicle`) packet pacing depends on the `MasterClient`'s update loop. Because the headless server disables cameras (`Camera.enabled = false`), mutes audio (`AudioListener.pause = false; AudioListener.volume = 0f` so FMOD voices release normally), and runs at a locked tick rate (`45–60 Hz`) with `~0%` GPU load, connected players in both **PvP** and **Co-op** receive rock-steady network updates even during heavy artillery barrages.
 3. **Full PvP & Co-op Team Slot Control**: Supports configuring `MatchData.mp_max_players_invaders` and `MatchData.mp_max_players_defenders` (e.g., balanced PvP across both factions, Asymmetric PvP, or pure Co-op on one side) plus friendly-fire/teamkill rules (`mp_allow_teamkillers`, `mp_kick_teamkillers`) and realism locks (`mp_allow_crosshair`, `mp_allow_hitmarker`, `mp_allow_tps`).
 4. **Keeps Your Steam Game Folder 100% Pure Vanilla**: Using Windows Directory Junctions (`mklink /J`), the headless server runs from an isolated `< 150 MB` `server_instance\` folder that links read-only data (`Easy Red 2_Data`, `MonoBleedingEdge`) from your Steam installation while keeping `BepInEx`, `dotnet`, `winhttp.dll`, and server plugins completely separate from your normal Steam client.
 
@@ -60,7 +77,7 @@ In *Easy Red 2*, Unity's `Transform`, `Physics.Raycast` (PhysX), `CharacterContr
 ### 4. "Ghost / Spectator" Host State & Zero-Render Loop
 * Once the match starts (`BattleManager.instance`), the headless server:
   * Remains cleanly unspawned in `RespawnPanel.InRespawningView` so no AI squad or bot slot is occupied by an AFK host character while `BattleManager` and `SpawnManager` run the battle normally.
-  * Disables all active `Camera` components, pauses `AudioListener`, shrinks to a minimal `160x90` window (or `-batchmode`), and locks `Application.targetFrameRate` to a steady `45–60` ticks per second.
+  * Disables all active `Camera` components, mutes `AudioListener` at zero volume, shrinks to a minimal `640x480` window (or `-batchmode -nographics`), and locks `Application.targetFrameRate` to a steady `45–60` ticks per second.
 
 ---
 

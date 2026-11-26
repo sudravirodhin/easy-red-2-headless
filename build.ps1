@@ -1,5 +1,6 @@
 param(
     [switch]$SetupServerInstance,
+    [switch]$RebuildCache,
     [string]$GameDir = $env:EASY_RED_2_DIR
 )
 
@@ -13,13 +14,125 @@ function Resolve-EasyRed2GameDir {
         return (Resolve-Path $ExplicitPath).Path
     }
 
+    $candidates = [System.Collections.Generic.List[string]]::new()
+
+    $steamPaths = @()
+    foreach ($reg in @(
+        @{ Path = "HKCU:\Software\Valve\Steam"; Name = "SteamPath" },
+        @{ Path = "HKLM:\SOFTWARE\WOW6432Node\Valve\Steam"; Name = "InstallPath" },
+        @{ Path = "HKLM:\SOFTWARE\Valve\Steam"; Name = "InstallPath" }
+    )) {
+        try {
+            $val = (Get-ItemProperty -Path $reg.Path -Name $reg.Name -ErrorAction SilentlyContinue).$($reg.Name)
+            if (-not [string]::IsNullOrWhiteSpace($val)) {
+                $steamPaths += ($val -replace '/', '\')
+            }
+        } catch {}
+    }
+
+    foreach ($sp in ($steamPaths | Select-Object -Unique)) {
+        $candidates.Add((Join-Path $sp "steamapps\common\Easy Red 2"))
+        $vdf = Join-Path $sp "steamapps\libraryfolders.vdf"
+        if (Test-Path $vdf) {
+            $content = Get-Content $vdf -Raw -ErrorAction SilentlyContinue
+            foreach ($m in [regex]::Matches($content, '"path"\s+"([^"]+)"')) {
+                $libPath = $m.Groups[1].Value -replace '\\\\', '\'
+                $candidates.Add((Join-Path $libPath "steamapps\common\Easy Red 2"))
+            }
+        }
+    }
+
     foreach ($drive in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
-        $cand = Join-Path $drive.Root "SteamLibrary\steamapps\common\Easy Red 2"
+        $root = $drive.Root
+        $candidates.Add((Join-Path $root "SteamLibrary\steamapps\common\Easy Red 2"))
+        $candidates.Add((Join-Path $root "Steam\steamapps\common\Easy Red 2"))
+        $candidates.Add((Join-Path $root "Program Files (x86)\Steam\steamapps\common\Easy Red 2"))
+    }
+
+    foreach ($cand in ($candidates | Select-Object -Unique)) {
         if (Test-Path (Join-Path $cand "Easy Red 2.exe")) {
             return $cand
         }
     }
     return $null
+}
+
+function Sync-Er2CacheIfNeeded {
+    param(
+        [string]$WorkspaceRoot,
+        [string]$ResolvedGameDir,
+        [string]$CscPath,
+        [string]$DotnetDir,
+        [bool]$ForceRebuild
+    )
+
+    $giDir = Join-Path $WorkspaceRoot "tools\gen_interop"
+    $inspectSrc = Join-Path $giDir "Inspect.cs"
+    $inspectDll = Join-Path $giDir "InspectInterop.dll"
+    if ((Test-Path $inspectSrc) -and (-not (Test-Path $inspectDll) -or ((Get-Item $inspectSrc).LastWriteTimeUtc -gt (Get-Item $inspectDll).LastWriteTimeUtc))) {
+        Write-Host "  -> Compiling InspectInterop.dll..." -ForegroundColor Cyan
+        & dotnet $CscPath /nologo /target:exe /optimize+ /nostdlib `
+            "/r:$DotnetDir\System.Private.CoreLib.dll" `
+            "/r:$DotnetDir\System.Runtime.dll" `
+            "/r:$DotnetDir\System.Console.dll" `
+            "/r:$DotnetDir\System.Collections.dll" `
+            "/r:$DotnetDir\System.Linq.dll" `
+            "/r:$DotnetDir\System.IO.FileSystem.dll" `
+            "/r:$DotnetDir\System.Security.Cryptography.Algorithms.dll" `
+            "/r:$DotnetDir\System.Security.Cryptography.Primitives.dll" `
+            "/r:$DotnetDir\System.Text.RegularExpressions.dll" `
+            "/r:$DotnetDir\netstandard.dll" `
+            "/r:$giDir\AsmResolver.dll" `
+            "/r:$giDir\AsmResolver.PE.dll" `
+            "/r:$giDir\AsmResolver.PE.File.dll" `
+            "/r:$giDir\AsmResolver.DotNet.dll" `
+            "/r:$giDir\AssetRipper.Primitives.dll" `
+            "/r:$giDir\Iced.dll" `
+            "/r:$giDir\LibCpp2IL.dll" `
+            "/out:$inspectDll" `
+            $inspectSrc
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to compile InspectInterop.dll with exit code $LASTEXITCODE"
+        }
+    }
+
+    if (-not $ResolvedGameDir -or -not (Test-Path (Join-Path $ResolvedGameDir "GameAssembly.dll"))) {
+        if ($ForceRebuild) {
+            throw "Cannot rebuild ER2 cache: GameAssembly.dll was not found. Pass -GameDir '<path to Easy Red 2>'."
+        }
+        return
+    }
+
+    $cacheDir = Join-Path $WorkspaceRoot "tools\er2_cache"
+    $manifestPath = Join-Path $cacheDir "manifest.json"
+    $gameAsmItem = Get-Item (Join-Path $ResolvedGameDir "GameAssembly.dll")
+    $curBytes = $gameAsmItem.Length
+    $curWriteUtc = $gameAsmItem.LastWriteTimeUtc.ToString("yyyy-MM-ddTHH:mm:ssZ")
+
+    $needsRebuild = $ForceRebuild -or (-not (Test-Path $manifestPath))
+    if (-not $needsRebuild) {
+        try {
+            $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+            if ([int64]$manifest.gameAssemblyBytes -ne $curBytes -or
+                [string]$manifest.gameAssemblyLastWriteUtc -ne $curWriteUtc) {
+                $needsRebuild = $true
+            }
+        } catch {
+            $needsRebuild = $true
+        }
+    }
+
+    if (-not $needsRebuild) {
+        return
+    }
+
+    Write-Host "[0/2] GameAssembly change or -RebuildCache detected: re-ripping ER2 disassembly, Lua scripts & interop cache (strictly read-only)..." -ForegroundColor Yellow
+    if (Test-Path $inspectDll) {
+        & dotnet $inspectDll --build-cache $cacheDir $ResolvedGameDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "InspectInterop.dll --build-cache failed with exit code $LASTEXITCODE"
+        }
+    }
 }
 
 function Resolve-CscPath {
@@ -95,6 +208,8 @@ function Patch-ServerUnityPlayerSingleInstance {
     }
 }
 
+$resolvedGameDir = Resolve-EasyRed2GameDir -ExplicitPath $GameDir
+
 $bepInExRoot = Join-Path $workspace "tools\bepinex\extracted"
 $dotnetDir = Join-Path $bepInExRoot "dotnet"
 $coreDir = Join-Path $bepInExRoot "BepInEx\core"
@@ -102,43 +217,78 @@ $interopDir = Join-Path $bepInExRoot "BepInEx\interop"
 $buildDir = Join-Path $workspace "build"
 $csc = Resolve-CscPath -WorkspaceRoot $workspace
 
+Sync-Er2CacheIfNeeded -WorkspaceRoot $workspace -ResolvedGameDir $resolvedGameDir -CscPath $csc -DotnetDir $dotnetDir -ForceRebuild:$RebuildCache.IsPresent
+
 New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
 
 Write-Host "[1/2] Compiling EasyRed2HeadlessServer.dll..." -ForegroundColor Cyan
-dotnet $csc /nologo /target:library /optimize+ /nostdlib `
-    /r:"$dotnetDir\System.Private.CoreLib.dll" `
-    /r:"$dotnetDir\System.Runtime.dll" `
-    /r:"$dotnetDir\System.Collections.dll" `
-    /r:"$dotnetDir\netstandard.dll" `
-    /r:"$coreDir\BepInEx.Core.dll" `
-    /r:"$coreDir\BepInEx.Unity.Common.dll" `
-    /r:"$coreDir\BepInEx.Unity.IL2CPP.dll" `
-    /r:"$coreDir\0Harmony.dll" `
-    /r:"$coreDir\Il2CppInterop.Runtime.dll" `
-    /r:"$interopDir\Il2Cppmscorlib.dll" `
-    /r:"$interopDir\Il2CppSystem.dll" `
-    /r:"$interopDir\Il2CppSystem.Core.dll" `
-    /r:"$interopDir\UnityEngine.CoreModule.dll" `
-    /r:"$interopDir\UnityEngine.AudioModule.dll" `
-    /r:"$interopDir\UnityEngine.IMGUIModule.dll" `
-    /r:"$interopDir\UnityEngine.InputLegacyModule.dll" `
-    /r:"$interopDir\UnityEngine.PhysicsModule.dll" `
-    /r:"$interopDir\UnityEngine.TextRenderingModule.dll" `
-    /r:"$interopDir\UnityEngine.UI.dll" `
-    /r:"$interopDir\UnityEngine.UIModule.dll" `
-    /r:"$interopDir\Photon3Unity3D.dll" `
-    /r:"$interopDir\PhotonUnityNetworking.dll" `
-    /r:"$interopDir\PhotonRealtime.dll" `
-    /r:"$interopDir\com.rlabrecque.steamworks.net.dll" `
-    /r:"$interopDir\Assembly-CSharp.dll" `
-    /out:"$buildDir\EasyRed2HeadlessServer.dll" `
-    "$workspace\src\EasyRed2Headless\Plugin.cs" `
-    "$workspace\src\EasyRed2Headless\HeadlessConfig.cs" `
-    "$workspace\src\EasyRed2Headless\HeadlessPatches.cs" `
-    "$workspace\src\EasyRed2Headless\HeadlessServerController.cs"
+$sourceFiles = Get-ChildItem -Path "$workspace\src\EasyRed2Headless" -Filter "*.cs" -Recurse | Select-Object -ExpandProperty FullName
+$cscArgs = @(
+    $csc,
+    "/nologo",
+    "/target:library",
+    "/optimize+",
+    "/nostdlib",
+    "/r:$dotnetDir\System.Private.CoreLib.dll",
+    "/r:$dotnetDir\System.Runtime.dll",
+    "/r:$dotnetDir\System.Collections.dll",
+    "/r:$dotnetDir\netstandard.dll",
+    "/r:$coreDir\BepInEx.Core.dll",
+    "/r:$coreDir\BepInEx.Unity.Common.dll",
+    "/r:$coreDir\BepInEx.Unity.IL2CPP.dll",
+    "/r:$coreDir\0Harmony.dll",
+    "/r:$coreDir\Il2CppInterop.Runtime.dll",
+    "/r:$interopDir\Il2Cppmscorlib.dll",
+    "/r:$interopDir\Il2CppSystem.dll",
+    "/r:$interopDir\Il2CppSystem.Core.dll",
+    "/r:$interopDir\UnityEngine.CoreModule.dll",
+    "/r:$interopDir\UnityEngine.AudioModule.dll",
+    "/r:$interopDir\UnityEngine.AnimationModule.dll",
+    "/r:$interopDir\UnityEngine.IMGUIModule.dll",
+    "/r:$interopDir\UnityEngine.InputLegacyModule.dll",
+    "/r:$interopDir\UnityEngine.PhysicsModule.dll",
+    "/r:$interopDir\UnityEngine.TerrainPhysicsModule.dll",
+    "/r:$interopDir\UnityEngine.TextRenderingModule.dll",
+    "/r:$interopDir\UnityEngine.UI.dll",
+    "/r:$interopDir\UnityEngine.UIModule.dll",
+    "/r:$interopDir\Photon3Unity3D.dll",
+    "/r:$interopDir\PhotonUnityNetworking.dll",
+    "/r:$interopDir\PhotonRealtime.dll",
+    "/r:$interopDir\com.rlabrecque.steamworks.net.dll",
+    "/r:$interopDir\Assembly-CSharp.dll",
+    "/out:$buildDir\EasyRed2HeadlessServer.dll"
+) + $sourceFiles
+
+& dotnet $cscArgs
 
 if ($LASTEXITCODE -ne 0) {
     throw "Compilation failed with exit code $LASTEXITCODE"
+}
+
+$verifySrc = Join-Path $workspace "tools\verify_patches\VerifyPatches.cs"
+if (Test-Path $verifySrc) {
+    $verifyDll = Join-Path $buildDir "VerifyPatches.dll"
+    $cscRuntimeConfig = Join-Path (Split-Path $csc -Parent) "csc.runtimeconfig.json"
+    if (-not (Test-Path $verifyDll) -or ((Get-Item $verifySrc).LastWriteTimeUtc -gt (Get-Item $verifyDll).LastWriteTimeUtc)) {
+        & dotnet $csc /nologo /target:exe /optimize+ /nostdlib `
+            "/r:$dotnetDir\System.Private.CoreLib.dll" `
+            "/r:$dotnetDir\System.Runtime.dll" `
+            "/r:$dotnetDir\System.Console.dll" `
+            "/r:$dotnetDir\System.Collections.dll" `
+            "/r:$dotnetDir\System.Linq.dll" `
+            "/r:$dotnetDir\System.Reflection.dll" `
+            "/r:$dotnetDir\System.IO.FileSystem.dll" `
+            "/r:$dotnetDir\netstandard.dll" `
+            "/out:$verifyDll" `
+            $verifySrc
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to compile VerifyPatches.dll"
+        }
+    }
+    & dotnet exec --runtimeconfig $cscRuntimeConfig $verifyDll "$buildDir\EasyRed2HeadlessServer.dll" $interopDir $coreDir $dotnetDir
+    if ($LASTEXITCODE -ne 0) {
+        throw "VerifyPatches failed! Fix Harmony signatures, shared>1 targets, Animator strings, or static code safety issues."
+    }
 }
 
 Write-Host "  -> Built $buildDir\EasyRed2HeadlessServer.dll" -ForegroundColor Green

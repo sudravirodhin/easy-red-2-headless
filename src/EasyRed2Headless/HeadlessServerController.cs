@@ -666,10 +666,81 @@ namespace EasyRed2Headless
                         }
                     }
                     catch { }
-                    pairInfo = $" | ClosestPair(foot={(footA != null)},dist={pDist:F1}m,overall={minOverallDist:F1}m,rayAB={rayHit}): A[{pA.name_surname},onVeh={pA.IsOnVehicle()},rnd={pA.IsRendered},cc={pA.m_controller?.enabled},pos={pA.transform.position},camo={camoA:F0},seesB={aSeesB},vis={(pA.aiController?.visibleTarget != null)},canFire={pA.aiController?.HasEnemyAndCanFireAtHim}] vs B[{pB.name_surname},onVeh={pB.IsOnVehicle()},rnd={pB.IsRendered},cc={pB.m_controller?.enabled},pos={pB.transform.position},camo={camoB:F0},seesA={bSeesA},vis={(pB.aiController?.visibleTarget != null)},canFire={pB.aiController?.HasEnemyAndCanFireAtHim}]";
+                    pairInfo = $" | ClosestPair(foot={(footA != null)},dist={pDist:F1}m,overall={minOverallDist:F1}m,rayAB={rayHit}): A[{pA.name_surname},onVeh={pA.IsOnVehicle()},rnd={pA.IsRendered},cc={pA.m_controller?.enabled},lod={pA.ragdoll_manager?.loddedColliders},cull={(pA.m_Animator != null ? (int)pA.m_Animator.cullingMode : -1)},pos={pA.transform.position},camo={camoA:F0},seesB={aSeesB},vis={(pA.aiController?.visibleTarget != null)},canFire={pA.aiController?.HasEnemyAndCanFireAtHim}] vs B[{pB.name_surname},onVeh={pB.IsOnVehicle()},rnd={pB.IsRendered},cc={pB.m_controller?.enabled},lod={pB.ragdoll_manager?.loddedColliders},cull={(pB.m_Animator != null ? (int)pB.m_Animator.cullingMode : -1)},pos={pB.transform.position},camo={camoB:F0},seesA={bSeesA},vis={(pB.aiController?.visibleTarget != null)},canFire={pB.aiController?.HasEnemyAndCanFireAtHim}]";
                 }
 
-                Plugin.Log.LogInfo($"[AIDiag-Units] alive={aliveSoldiers}/{total} (Allies={alliesCount},Axis={axisCount}) | onVeh={onVehicleCount} | hasDest={hasDestCount} | hasPath={hasPathCount} | moving={movingCount} | withTarget={withTarget} | firing={pressingTrigger}{pairInfo}{sampleInfo}");
+                string humanInfo = "";
+                try
+                {
+                    Soldier human = null;
+                    List<Soldier> enemies = null;
+                    for (int i = 0; i < allies.Count; i++)
+                    {
+                        var synch = allies[i].soldierSyncher;
+                        if (synch != null && synch.IsControlledByAPlayer())
+                        {
+                            human = allies[i];
+                            enemies = axis;
+                            break;
+                        }
+                    }
+                    if (human == null)
+                    {
+                        for (int i = 0; i < axis.Count; i++)
+                        {
+                            var synch = axis[i].soldierSyncher;
+                            if (synch != null && synch.IsControlledByAPlayer())
+                            {
+                                human = axis[i];
+                                enemies = allies;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (human != null)
+                    {
+                        Soldier nearEnemy = null;
+                        float nearDist = 999999f;
+                        Vector3 hPos = human.transform.position;
+                        if (enemies != null)
+                        {
+                            for (int i = 0; i < enemies.Count; i++)
+                            {
+                                float d = Vector3.Distance(hPos, enemies[i].transform.position);
+                                if (d < nearDist)
+                                {
+                                    nearDist = d;
+                                    nearEnemy = enemies[i];
+                                }
+                            }
+                        }
+
+                        bool enemySees = false;
+                        string hRayHit = "none";
+                        if (nearEnemy != null)
+                        {
+                            try { enemySees = nearEnemy.CanSee(human.Cast<Spottable>()); } catch { }
+                            try
+                            {
+                                Vector3 eye = nearEnemy.FacePosition();
+                                Vector3 diff = human.SpotPosition() - eye;
+                                float mag = diff.magnitude;
+                                if (mag > 0.001f && Physics.Raycast(eye, diff / mag, out RaycastHit hit, 1000f, ResourcesManager.visionMask))
+                                {
+                                    var conn = Creature.GetConnectedSpottable(hit.transform);
+                                    hRayHit = $"{hit.collider?.name}(lyr={hit.collider?.gameObject.layer},d={hit.distance:F1},spot={(conn != null ? conn.TryCast<Creature>()?.name ?? "yes" : "no")})";
+                                }
+                            }
+                            catch { }
+                        }
+
+                        humanInfo = $" | Human[{human.name_surname},lod={human.ragdoll_manager?.loddedColliders},cull={(human.m_Animator != null ? (int)human.m_Animator.cullingMode : -1)},nearEnemy={nearEnemy?.name_surname ?? "none"},d={(nearEnemy != null ? nearDist : -1f):F1}m,enemySees={enemySees},ray={hRayHit}]";
+                    }
+                }
+                catch { }
+
+                Plugin.Log.LogInfo($"[AIDiag-Units] alive={aliveSoldiers}/{total} (Allies={alliesCount},Axis={axisCount}) | onVeh={onVehicleCount} | hasDest={hasDestCount} | hasPath={hasPathCount} | moving={movingCount} | withTarget={withTarget} | firing={pressingTrigger}{pairInfo}{humanInfo}{sampleInfo}");
             }
             catch (Exception ex)
             {
@@ -690,13 +761,16 @@ namespace EasyRed2Headless
 
                 if (resizeWindow)
                 {
-                    Screen.SetResolution(540, 300, false);
+                    Screen.SetResolution(640, 480, false);
                 }
 
-                IntPtr hwnd = GetActiveWindow();
-                if (hwnd != IntPtr.Zero)
+                if (OperatingSystem.IsWindows())
                 {
-                    SetWindowTextW(hwnd, $"Easy Red 2 — Headless Server ({HeadlessConfig.ServerName.Value})");
+                    IntPtr hwnd = GetActiveWindow();
+                    if (hwnd != IntPtr.Zero)
+                    {
+                        SetWindowTextW(hwnd, $"Easy Red 2 — Headless Server ({HeadlessConfig.ServerName.Value})");
+                    }
                 }
             }
             catch { }

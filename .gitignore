@@ -1,12 +1,25 @@
-# Build output
+# Build output & isolated runtime
 build/
 releases/
 server_instance/
+backups/
+scratch/
 
-# Extracted BepInEx & Roslyn binaries
-tools/
+# Local Toolchains & Engine Dumps
+tools/*
+!tools/verify_patches/
+tools/verify_patches/*.dll
+tools/verify_patches/*.exe
+tools/verify_patches/*.pdb
 
-# Local notes & agent rules
+# Local notes & agent workspace files
 AGENTS.md
+CLAUDE.md
+GEMINI.md
 NOTES.md
+CHANGELOG.md
 docs/
+.gemini/
+.claude/
+.cursor/
+.antigravity/

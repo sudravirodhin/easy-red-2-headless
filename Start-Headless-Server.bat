@@ -13,5 +13,5 @@ if not exist "server_instance\Easy Red 2.exe" (
 )
 
 echo [INFO] Launching Easy Red 2 Headless Dedicated Server...
-start "" "%~dp0server_instance\Easy Red 2.exe" -screen-fullscreen 0 -screen-width 540 -screen-height 300 -logFile "%~dp0server_instance\ServerPlayer.log"
+start "" "%~dp0server_instance\Easy Red 2.exe" -screen-fullscreen 0 -screen-width 640 -screen-height 480 -logFile "%~dp0server_instance\ServerPlayer.log"
 echo [INFO] Server process launched! Check server_instance\BepInEx\LogOutput.log for live status.
